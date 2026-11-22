@@ -239,6 +239,17 @@ def _mp4_sync_samples(path):
         return None
 
 
+def _decode_one(video_path, idx, episode_length):
+    """[sim2real fork] Frame ``idx`` (uint8 CHW) of one single-camera mp4.
+
+    These sidecars carry their own time base, so the 512-tick CFR map of the
+    combined export does not apply: decode exactly (open-time packet scan)."""
+    from torchcodec.decoders import VideoDecoder
+
+    del episode_length
+    return VideoDecoder(str(video_path), num_ffmpeg_threads=1)[idx]
+
+
 def decode_frame(ep_dir, idx, episode_length, source_cameras, camera_keys):
     """Decode combined-video frame idx via torchcodec with a synthesized CFR
     frame map (pts = 512*k, 1/15360 timebase) whose keyframe flags come from
@@ -252,6 +263,15 @@ def decode_frame(ep_dir, idx, episode_length, source_cameras, camera_keys):
     from torchcodec.decoders import VideoDecoder
 
     video_path = ep_dir / "combined_camera-images-rgb.mp4"
+    if not video_path.exists() and all(
+        (ep_dir / f"{cam}.mp4").exists() for cam in camera_keys
+    ):
+        # [sim2real fork] Per-camera layout: one <camera>.mp4 per camera key
+        # (sim2real staged episodes, linked by name); see _decode_one.
+        return {
+            cam: _decode_one(ep_dir / f"{cam}.mp4", idx, episode_length).float() / 255.0
+            for cam in camera_keys
+        }
     keyframes = _KEYFRAME_CACHE.get(ep_dir)
     if keyframes is None:
         sync = _mp4_sync_samples(video_path)
