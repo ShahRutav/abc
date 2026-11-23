@@ -184,6 +184,11 @@ class TrainConfig:
     ckpt_every: int = 5000
     log_wandb: bool = False
     wandb_project: str = "minimal-abc"
+    # [sim2real fork] Optional plugin: a dotted module whose ``install(config, options, rank)``
+    # may set the dataloader / train_loop hooks (SAMPLE_HOOK, COLLATE_HOOK, TO_DEVICE_HOOK,
+    # VLA_MODEL_FACTORY). ``plugin_options`` is a JSON object. Empty = upstream behaviour.
+    plugin: str = ""
+    plugin_options: str = "{}"
 
     optim: OptimConfig = field(default_factory=OptimConfig)
     flow: FlowConfig = field(default_factory=FlowConfig)

@@ -72,6 +72,28 @@ def _distributed_context():
     return distributed, rank, world, local_rank, local_world, device
 
 
+# [sim2real fork] Plugin hooks (see TrainConfig.plugin; None = upstream).
+# TO_DEVICE_HOOK(batch, out, device) -> out: extra batch fields to the device (VLA path).
+# VLA_MODEL_FACTORY(model_config, *, backbone_autocast) -> a VLAPolicy (subclass).
+TO_DEVICE_HOOK = None
+VLA_MODEL_FACTORY = None
+
+
+def _install_plugin(config, rank):
+    """Import ``config.plugin`` and call its ``install(config, options, rank)``."""
+    if not config.plugin:
+        return None
+    import importlib
+    import json as _json
+
+    module = importlib.import_module(config.plugin)
+    options = _json.loads(config.plugin_options or "{}")
+    module.install(config, options, rank)
+    if rank == 0:
+        print(f"[plugin] {config.plugin} installed with {options}")
+    return module
+
+
 def batch_to_device(batch, device, embedder, camera_keys):
     """Move a batch to the device and attach policy-specific conditioning.
 
@@ -94,6 +116,8 @@ def batch_to_device(batch, device, embedder, camera_keys):
         return out
     # VLA path: keep raw prompts, stack cameras into a single tensor.
     out["prompt"] = batch["prompt"]
+    if TO_DEVICE_HOOK is not None:
+        out = TO_DEVICE_HOOK(batch, out, device)
     return stack_camera_batch(out, camera_keys)
 
 
@@ -280,7 +304,8 @@ def _build_vla_model(config, cache_root, device, resume_ckpt, rank):
     model_config = deepcopy(config.vla_model)
     if starting_ckpt is not None:
         model_config.backbone.load_base_checkpoint = False
-    model = VLAPolicy(model_config, backbone_autocast=config.vla_bf16_autocast)
+    factory = VLA_MODEL_FACTORY or VLAPolicy
+    model = factory(model_config, backbone_autocast=config.vla_bf16_autocast)
     if rank == 0:
         backbone_compute = (
             "BF16 backbone autocast" if config.vla_bf16_autocast
@@ -315,6 +340,7 @@ def main(config: TrainConfig):
     )
 
     distributed, rank, world, local_rank, local_world, device = _distributed_context()
+    _install_plugin(config, rank)
     data_scope = data_parallel_scope(cache_root, rank, world, local_rank, local_world)
     if distributed and data_scope.placement == "node_sharded":
         check_shard_consistency(read_shard_marker(cache_root), world)
@@ -480,9 +506,10 @@ def main(config: TrainConfig):
                 print(f"step {global_step:6d}  loss {loss_d.item():.4f}  "
                       f"lr {lr:.2e}  gnorm {grad_norm:.3f}  {sps:.2f} it/s  peak {peak_gib:.1f} GiB")
                 if wandb:
+                    extra = module.plugin_metrics() if hasattr(module, "plugin_metrics") else {}
                     wandb.log({"loss": loss_d.item(), "lr": lr,
                                "grad_norm": grad_norm,
-                               "steps_per_s": sps}, step=global_step)
+                               "steps_per_s": sps, **extra}, step=global_step)
 
         if global_step % config.val_every == 0:
             _run_validation(

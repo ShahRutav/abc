@@ -191,6 +191,12 @@ def read_state_action_rows(
 
 _KEYFRAME_CACHE: dict = {}
 
+# [sim2real fork] Plugin hooks (abc_minimal.train_loop installs them from --plugin; None = upstream).
+# SAMPLE_HOOK(dataset, sample, *, ep_dir, frame_idx, length) -> sample, called last in __getitem__.
+# COLLATE_HOOK(samples, batch) -> batch, called last in collate.
+SAMPLE_HOOK = None
+COLLATE_HOOK = None
+
 
 def _mp4_sync_samples(path):
     """1-based keyframe sample numbers from the mp4's stss box, or None.
@@ -377,13 +383,16 @@ class EpisodeDataset(Dataset):
             image_size=self.image_size,
         )
         prompt = self.build_prompt(ep_dir, k, task_name, prompt_timeline)
-        return {
+        sample = {
             "state": torch.from_numpy(state),
             "actions": torch.from_numpy(actions),
             "images": images,
             "state_is_masked": state_is_masked,
             "prompt": prompt,
         }
+        if SAMPLE_HOOK is not None:
+            sample = SAMPLE_HOOK(self, sample, ep_dir=ep_dir, frame_idx=k, length=length)
+        return sample
 
     def build_prompt(self, ep_dir, frame_idx, task_name, prompt_timeline):
         """Compose the text prompt for one frame: the episode's prompt at that
@@ -476,7 +485,7 @@ class GlobalStepSampler(Sampler):
         return self.count
 
 def collate(samples, camera_keys):
-    return {
+    batch = {
         "state": torch.stack([s["state"] for s in samples]),
         "actions": torch.stack([s["actions"] for s in samples]),
         "images": {
@@ -485,6 +494,9 @@ def collate(samples, camera_keys):
         "state_is_masked": torch.tensor([s["state_is_masked"] for s in samples]),
         "prompt": [s["prompt"] for s in samples],
     }
+    if COLLATE_HOOK is not None:
+        batch = COLLATE_HOOK(samples, batch)
+    return batch
 
 
 # --- loader construction -------------------------------------------------------
