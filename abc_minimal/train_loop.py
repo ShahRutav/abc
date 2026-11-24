@@ -31,6 +31,7 @@ from abc_minimal.checkpointing import (
 )
 from abc_minimal.config import (
     TrainConfig,
+    lr_factor,
     validate_train_config,
     validate_vla_checkpoint_config,
 )
@@ -375,7 +376,7 @@ def main(config: TrainConfig):
         _shard_vla(model, world, local_world)
     optimizer = _build_optimizer(model, config, is_vla, rank)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer, lambda step: min((step + 1) / config.optim.lr_warmup_steps, 1.0)
+        optimizer, lambda step: lr_factor(step, config.optim)
     )
     if resume_ckpt is not None:
         restore_training_state(resume_ckpt, optimizer=optimizer, scheduler=scheduler,

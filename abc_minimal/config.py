@@ -28,6 +28,22 @@ class OptimConfig:
     vision_lr_scale: float = 1.0
     # VLA policy only: LR multiplier for the Gemma/SigLIP backbone param group.
     backbone_lr_scale: float = 1.0
+    # [sim2real fork] Optional cosine decay (an anneal on resume). With lr_decay_steps > 0, from step
+    # lr_decay_start the LR factor follows cosine from 1 to lr_decay_min_ratio over lr_decay_steps
+    # steps and then holds there. lr_decay_steps = 0 (default) = upstream warmup-then-constant.
+    lr_decay_start: int = 0
+    lr_decay_steps: int = 0
+    lr_decay_min_ratio: float = 0.1
+
+
+def lr_factor(step: int, optim: "OptimConfig") -> float:
+    """LR multiplier at scheduler step ``step``: linear warmup, then constant, then the optional cosine."""
+    factor = min((step + 1) / optim.lr_warmup_steps, 1.0)
+    if optim.lr_decay_steps > 0 and step >= optim.lr_decay_start:
+        progress = min((step - optim.lr_decay_start) / optim.lr_decay_steps, 1.0)
+        floor = optim.lr_decay_min_ratio
+        factor *= floor + (1.0 - floor) * 0.5 * (1.0 + math.cos(math.pi * progress))
+    return factor
 
 
 @dataclass
